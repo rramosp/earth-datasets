@@ -8,8 +8,9 @@ from loguru import logger
 from progressbar import progressbar as pbar
 from joblib import Parallel, delayed
 import numpy as np
+from geetiles import utils
 
-groups = "0,1"
+groups = "0,1,L0,L1,L2,L3,L4"
 
 def main():
     parser = argparse.ArgumentParser()
@@ -21,6 +22,7 @@ def main():
     download_parser.add_argument('--dataset', required=True, type=str, help='gee dataset to download')
     download_parser.add_argument('--pixels_lonlat', default='[512,512]', type=str, help='a tuple, if set, the tile will have this exact size in pixels, regardless the physical size. For instance --pixels_lonlat [100,100]')
     download_parser.add_argument('--shuffle_order', default=False, action='store_true', help='a tuple, if set, the tile will have this exact size in pixels, regardless the physical size. For instance --pixels_lonlat [100,100]')
+    download_parser.add_argument('--aoi', default=None, type=str, help="download only predefined aoi. available 'lux', 'eur'")
 
     summary_parser = subparsers.add_parser('summary', help='summary of chipsets download progress')
     summary_parser.add_argument('--chipsets_folder', required=True, type=str, help='folder containing one geetiles geojson per chipset')
@@ -37,7 +39,7 @@ def main():
         summary(args.chipsets_folder, args.dataset, args.output_stats_file)
 
     if args.cmd=='download':
-        download(args.chipsets_folder, args.dataset, args.pixels_lonlat, args.shuffle_order)
+        download(args.chipsets_folder, args.dataset, args.pixels_lonlat, args.shuffle_order, args.aoi)
 
 def summary(chipsets_folder, dataset, output_stats_file):
 
@@ -69,14 +71,29 @@ def summary(chipsets_folder, dataset, output_stats_file):
     print (r[partially_downloaded])
 
 
-def download(chipsets_folder, dataset, pixels_lonlat, shuffle_order):
+def download(chipsets_folder, dataset, pixels_lonlat, shuffle_order, aoi):
+
     chipsets_files = [f for f in os.listdir(chipsets_folder) if f.endswith(".geojson")]
+    if aoi is not None:
+        # use only the chipsets covering the requested aoi
+        logger.info(f"getting chipsets for aoi {aoi}")
+        utils.aoinames.load()
+        aoi_geom = utils.aoinames.get_aoi(aoi)
+    
+        z = gpd.read_parquet(f"{chipsets_folder}/../chipsets-definitions.parquet")
+        z = z[[gi.intersects(aoi_geom) for gi in z.geometry.values]]
+        chipsets_files = [i for i in chipsets_files if sum([ci in i for ci in z.index])==1 ]
+        logger.info(f"found {len(chipsets_files)} chipsets")
+
     if shuffle_order:
         chipsets_files = np.random.permutation(chipsets_files)
 
     for chipset_file in chipsets_files:
-        #if '235492c72fa62' not in chipset_file:
+
+        # around luxembourg L0-L4
+        #if sum([k in chipset_file for k in ['25cffb64f0953', '142f3a38257ca', '28c7b4b0200d2', '19f5ef11e7a2a', '27279556b1c94', '192735d71fee9']])==0:
         #    continue
+
         logger.info(f"processing chipset {chipset_file}")
         dataset_folder = f"{chipsets_folder}/{chipset_file.split('.')[0]}/{dataset}"
         z = gpd.read_file(f"{chipsets_folder}/{chipset_file}")
@@ -104,10 +121,12 @@ def download(chipsets_folder, dataset, pixels_lonlat, shuffle_order):
                 meters_per_pixel = None, 
                 shuffle          = True,
                 max_downloads   = None,
-                groups          = groups
+                groups          = groups,
+                aoi             = aoi
             )
         else:
             logger.info("chipset already fully downloaded")
 
+        
 if __name__ == '__main__':
     main()
